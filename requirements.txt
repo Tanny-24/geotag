@@ -1,0 +1,11 @@
+# install torch first with the CUDA build that matches the server, e.g.
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+transformers==4.51.3
+peft==0.15.2
+accelerate>=0.34
+numpy
+pillow
+tqdm
+requests
+python-dateutil
+gradio>=4.44        # only for demo.py

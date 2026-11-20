@@ -1,0 +1,67 @@
+# Dataset images and large files
+data/tara_images/
+data/processed/
+data/processed_articles/
+data/tara_articles/
+
+# Generated captions and retrieval outputs
+data/qwen2.5_caption/
+data/qwen2.5_caption_gt/
+data/retrieval_results/
+
+# Model checkpoints
+checkpoints/
+models/
+*.pt
+*.pth
+*.safetensors
+*.bin
+
+# Python files
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+*.key
+
+# Notebook and system files
+.ipynb_checkpoints/
+.DS_Store
+
+# Large data, images, weights, run outputs (never commit)
+data/
+datasets/
+runs/
+runs_*/
+outputs/
+input_zip_nyt_final/
+TARA_dataset/
+**/img/
+**/non_gt_img*/
+*.png
+*.jpg
+*.jpeg
+*.npy
+*.npz
+*.jsonl
+*.tar
+*.tar.gz
+*.zip
+*.pdf
+*.ckpt
+*.onnx
+*.h5
+*.log
+
+# Upstream clones (own .git; one remote URL holds a credential) - never track
+NewsVQA/
+TARA/
+code/
+_archive/upstream/
+
+# Figures the slides need
+!paper/figs/*.pdf
+
+# Teammates' IEEE report: has their institute emails and roll numbers
+paper/teammates_report.tex

@@ -1,0 +1,16 @@
+{
+  "raw": 451883,
+  "removed_dev_test_source": 2734,
+  "train_articles_added": 1018,
+  "tara_train": 12306,
+  "tara_train_with_target_loc": 12306,
+  "tara_train_with_date": 12306,
+  "tara_dev": 1644,
+  "tara_dev_with_target_loc": 1474,
+  "tara_dev_with_date": 1318,
+  "tara_test": 1644,
+  "tara_test_with_target_loc": 1474,
+  "tara_test_with_date": 1303,
+  "corpus": 176314,
+  "corpus_tara_train_articles": 12305
+}

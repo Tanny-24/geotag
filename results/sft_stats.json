@@ -1,0 +1,28 @@
+{
+  "train": {
+    "n": 6000,
+    "formats": {
+      "qa": 1769,
+      "mcqa": 2406,
+      "qar": 1825
+    },
+    "noisy": 909,
+    "mcqa_letter_kind": {
+      "none": 955,
+      "location": 1258,
+      "event": 193
+    },
+    "top3_precision_loc": 0.438,
+    "top3_precision_evt": 0.036
+  },
+  "dev": {
+    "n_eval": 500,
+    "top3_precision_loc": 0.527,
+    "top3_precision_evt": 0.037
+  },
+  "test": {
+    "n_eval": 500,
+    "top3_precision_loc": 0.543,
+    "top3_precision_evt": 0.044
+  }
+}
