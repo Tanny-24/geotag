@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# NewsVQA-lite full pipeline
-# Run from the repo root.
+# Geotag full pipeline on a machine with its own GPU (same steps as notebooks/geotag_colab.ipynb).
+# Run from the repo root after `python -m nv.prepare`.
 
 set -euo pipefail
 
@@ -14,13 +14,13 @@ export PYTHONUNBUFFERED=1
 
 # Data and outputs inside the repo (both git-ignored)
 export NV_DATA="${NV_DATA:-$ROOT/data}"
-export NV_OUT="${NV_OUT:-$ROOT/runs}"
+export NV_OUT="${NV_OUT:-$ROOT/runs_3b}"
 
 # Choose dev or test
 SPLIT="${SPLIT:-test}"
 
 echo "======================================"
-echo "NewsVQA Pipeline"
+echo "Geotag pipeline"
 echo "Project root: $ROOT"
 echo "GPU: $CUDA_VISIBLE_DEVICES"
 echo "NV_DATA: $NV_DATA"
@@ -54,7 +54,7 @@ python -m nv.retrieve
 python -m nv.cross_encoder
 
 # 4. Build training/evaluation data
-python -m nv.build_sft --n_train 6000 --n_eval 500 --noise 0.15
+python -m nv.build_sft --n_train 6000 --n_eval 1644 --noise 0.15
 
 # 5. Zero-shot baselines
 python -m nv.infer --split "$SPLIT" --fmt qa_noev --name zs_noev
@@ -73,10 +73,16 @@ python -m nv.infer --split "$SPLIT" --fmt mcqa \
 python -m nv.infer --split "$SPLIT" --fmt qa \
     --name lora_mixed_qa --adapter ckpt/lora_mixed/final
 
-# 8. Final evaluation
+# 8. Trust layer: MCQA probabilities on dev calibrate the threshold
+python -m nv.infer --split dev --fmt mcqa \
+    --name lora_mixed_mcqa --adapter ckpt/lora_mixed/final
+python -m nv.hierarchy --name lora_mixed_mcqa
+
+# 9. Final evaluation and summary
 python -m nv.evaluate --split "$SPLIT" --baseline zs_noev
+python scripts/extract_metrics.py --src "$NV_OUT/results" --out "$NV_OUT/metrics_summary.json"
 
 echo "======================================"
-echo "NewsVQA pipeline completed!"
+echo "Geotag pipeline completed!"
 echo "======================================"
 

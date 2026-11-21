@@ -61,14 +61,14 @@ Notation: image x, article a with headline h_a, abstract b_a and location string
 
 GREAT was introduced by Siingh et al. (GETReason, ACL 2025). `metrics.py` follows NewsRECON's implementation, which scores only the date and location parts (no event-similarity term); say so in the paper.
 
-## Commands (run from the repo root; defaults NV_DATA=data, NV_OUT=runs)
+## Commands (run from the repo root with NV_OUT=runs_3b; NV_DATA defaults to data)
 | Step | Command |
 |---|---|
-| Corpus (CPU, needed once: `runs/prepared/corpus.jsonl` is missing) | `python -m nv.prepare` |
+| Corpus (CPU, once) | `python -m nv.prepare` |
 | CLIP embeddings | `python -m nv.embed` |
 | Bi-encoder retrieval | `python -m nv.retrieve` |
 | Location re-ranker | `python -m nv.cross_encoder` |
-| Training / eval data | `python -m nv.build_sft --n_train 6000 --n_eval 500 --noise 0.15` |
+| Training / eval data | `python -m nv.build_sft --n_train 6000 --n_eval 1644 --noise 0.15` |
 | **Train** | `python -m nv.train_lora --out ckpt/lora_mixed --workers 4` |
 | Inference | `python -m nv.infer --split test --fmt qa --name lora_mixed_qa --adapter ckpt/lora_mixed/final` |
 | **Evaluate** | `python -m nv.evaluate --split test --baseline zs_noev` |

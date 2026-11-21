@@ -1,88 +1,130 @@
-# NewsVQA-lite: NewsRECON retrieval + LiveVQA-style knowledge updating
+# Geotag
 
-Where and when was a news photo taken? We retrieve NYT articles for the image (a light NewsRECON
-pipeline), then fine-tune Qwen2.5-VL-3B with LoRA on the three LiveVQA training formats (QA, MCQA, QAR).
-Training targets come from weak relevance labels, so the model learns when to **trust or reject**
-retrieved evidence. This targets NewsRECON's "blind trust" failure (Sec. 4.8.4).
+Where and when was this news photo taken? Geotag retrieves news articles for a photo, lets a fine-tuned vision-language model weigh that evidence, and answers only as precisely as the evidence allows, with a conformal bound on the error rate.
 
+> Photo of a collapsed building, no caption.
+> Without the trust layer: **Port-au-Prince, Haiti, 2010-01-19**, which may be wrong in the city or the day.
+> With the trust layer at ε = 10%: **Haiti, 2010**, an answer the model can stand behind, with expected error at most 10%.
+
+## How it works
+
+```mermaid
+flowchart LR
+  A["News photo"] --> B["CLIP ViT-L/14<br/>top-50 of 176k NYT articles"]
+  B --> C["Location re-ranker<br/>s_bi · σ(s_loc)^0.1"]
+  C --> D["Top-3 articles +<br/>4 candidate events"]
+  D --> E["Qwen2.5-VL-3B + LoRA<br/>trained on wrong-place evidence"]
+  E --> F["Trust layer<br/>conformal back-off"]
+  F --> G["Haiti, 2010<br/>(error ≤ ε)"]
 ```
-image ─► CLIP ViT-L/14 (frozen) ─► top-50 NYT articles (headline+abstract) ─► location cross-encoder rerank
-      ─► top-3 evidence + 4 clustered candidate events ─► Qwen2.5-VL-3B + LoRA ─► "Location: … / Date: …"
-```
 
-| NewsRECON / LiveVQA component | Here | Why |
+1. **Retriever.** Frozen CLIP ViT-L/14 scores 176,314 NYT articles (2010–2021, headline + abstract) against the photo and keeps the top 50. A small MLP re-ranks them by how well each article's location fits the photo; its weight α = 0.1 is chosen on the dev set.
+2. **Generator.** Qwen2.5-VL-3B-Instruct reads the photo, the top-3 articles and four candidate (location, date) events built from the top-20 articles. LoRA (r = 64, vision tower frozen) trains it on 6,000 TARA examples in three formats (direct answer, multiple choice, verdict per article). In 15% of the examples every article is from the wrong place, so the model learns to reject evidence instead of copying it.
+3. **Trust layer** (`nv/hierarchy.py`). Turns the model's multiple-choice probabilities into an answer at the right level of detail, described below.
+
+## Trust layer
+
+Each candidate event k gets a probability $p_k$ from the model's first answer token. Its location resolves through the GeoNames gazetteer to the path country > region > city, its date to year > month > day. Starting from the most likely candidate $k^\ast$, the confidence of the node at depth $l$ of its path is the probability of all candidates that share that node:
+
+$$c_l = \sum_k p_k \, \mathbf{1}\left[\mathrm{path}_k[{:}l] = \mathrm{path}_{k^\ast}[{:}l]\right], \qquad c_1 \ge c_2 \ge c_3 .$$
+
+Geotag answers with $k^\ast$'s node at the finest depth where $c_l \ge \lambda$, and gives no answer when even the country (or year) is below $\lambda$. Along one path, a correct city implies a correct region and country, so the error of the committed answer can only fall as $\lambda$ grows. That makes conformal risk control applicable: on the $n$ dev images,
+
+$$\hat\lambda = \min\left\{\lambda : \frac{n \, \hat R_{\text{dev}}(\lambda) + 1}{n + 1} \le \varepsilon\right\}
+\quad\Longrightarrow\quad \mathbb{E}\left[\text{error on a new image}\right] \le \varepsilon ,$$
+
+assuming dev and test images are exchangeable. The guarantee holds on average over calibration sets, not for every single split.
+
+The layer is compared with two baselines on the same images: **finest** (always answer with full detail) and **selective** (the same calibration on $p_{k^\ast}$ alone, answering in full or not at all). It reports, for ε ∈ {5%, 10%, 20%}, the test error, the share of images answered, the share answered at each depth, and specificity (mean depth / 3).
+
+On synthetic probabilities over the real TARA labels, the average test error over 200 random dev/test splits was 4.91%, 9.90% and 19.75% for ε = 5%, 10% and 20% (location) and 4.99%, 9.93% and 19.84% (date). Synthetic probabilities cannot show whether back-off beats the selective baseline; that needs the real model's outputs.
+
+## Results
+
+**Status:** the code is complete; the full GPU run is pending. The tables below will report every number on the 1,571 TARA test images that have a gold location or date, with 95% bootstrap intervals, plus `GREAT@500` on the 500-image subset used by the reference run.
+
+Reference: the NewsVQA-lite run of the same pipeline (500 test images, 1 seed). These are the numbers this repository sets out to reproduce; they are not yet results of this repository.
+
+| Run | GREAT | Location EM@1 | Date EM@1 | Correct → wrong location (vs photo only) |
+|---|---|---|---|---|
+| Retrieval only (re-ranked top-1) | 54.7 | 25.5 | 4.2 | 57 |
+| Qwen2.5-VL-3B, photo only | 51.1 | 24.6 | 1.2 | – |
+| Qwen2.5-VL-3B + top-3 articles | 57.2 | 31.4 | 3.5 | 29 |
+| Qwen2.5-VL-7B + top-3 articles | 57.8 | 27.6 | 3.9 | 42 |
+| 3B + LoRA, direct answer | 62.5 | 44.2 | 4.6 | 7 |
+| 3B + LoRA, multiple choice | 61.9 | 44.8 | 5.6 | 10 |
+
+The multiple-choice confidence's expected calibration error fell from 23.6 (zero-shot) to 18.4 (LoRA). Retrieval: location R@1 on test is 52.9 with CLIP alone and 56.3 after re-ranking.
+
+## Run it
+
+**Data** (not in this repository):
+
+| What | Source | Where it goes |
 |---|---|---|
-| Bi-encoder (CLIP fine-tuned on Qwen news captions) | frozen CLIP-L/14 on headline+abstract | no captions available; abstract is the best text input before fine-tuning (NewsRECON Table 3) |
-| Location cross-encoder | kept: MLP head on frozen CLIP, BCE, `s_bi·σ(s_loc)` | largest gain in NewsRECON (+10 pp R@1), trains in minutes |
-| Event cross-encoder + clustering | replaced by ±7-day date clustering of candidate events | only +0.4 pp R@1 in NewsRECON |
-| Corpus (Qwen filter, NYT+Guardian, 88k) | raw NYT 2010–2021, rule filter, 176k articles; TARA dev/test source articles removed | no time to run the Qwen filter |
-| MLLM | Qwen2.5-VL-3B-Instruct (also used by LiveVQA) | fits the deadline and GPU |
-| PEFT formats QA / MCQA / QAR | all three, mixed 30/40/30, LoRA r=64, lr 1e-4, 1 epoch, vision frozen | LiveVQA Sec. 4 recipe |
-| Noise | 30% of training samples get only non-relevant evidence | teaches the model to reject evidence |
+| TARA labels and images | [github.com/zeyofu/TARA](https://github.com/zeyofu/tara) | `data/TARA_dataset/{input,img/{train,dev,test}}` |
+| NYT articles 2010–2021 | NYT Archive API, one JSON file per year | `data/processed_articles/nyt_articles_<year>.json` |
+| GeoNames | `cities15000.zip`, `countryInfo.txt`, `admin1CodesASCII.txt` from [download.geonames.org](https://download.geonames.org/export/dump/), plus NewsRECON's `geonames_results.json` | `runs_3b/geonames/` |
 
-## 0. Setup on the server
+**1. Build the corpus on a laptop** (CPU, about 15 s; needs only the Python standard library):
 
 ```bash
-git clone <this repo> NewsVQA-lite && cd NewsVQA-lite
-conda create -n newsvqa python=3.10 -y && conda activate newsvqa
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121   # match the server's CUDA
-pip install -r requirements.txt
-# pre-download models (≈ 9 GB) so later steps never wait on the network
-huggingface-cli download Qwen/Qwen2.5-VL-3B-Instruct
-huggingface-cli download openai/clip-vit-large-patch14
+NV_OUT=runs_3b python -m nv.prepare
 ```
 
-Data layout on the server (`NV_DATA` and `NV_OUT` can live anywhere):
+**2. Run everything else on Colab** with [`notebooks/geotag_colab.ipynb`](notebooks/geotag_colab.ipynb): put `data/tara_img.zip` (a zip of `data/TARA_dataset/img`), `runs_3b/prepared/` and `runs_3b/geonames/` in `My Drive/geotag/`, add a read-only GitHub token as the Colab secret `GH_TOKEN`, choose an L4 GPU and run all cells. Each step writes to Drive and is skipped once done, so a disconnected session resumes where it stopped. Expect about 4–5 L4 hours.
+
+On a machine with its own GPU, `bash scripts/run_all.sh` runs the same steps.
+
+| Step | Command |
+|---|---|
+| CLIP embeddings, retrieval, re-ranker | `python -m nv.embed`, `python -m nv.retrieve`, `python -m nv.cross_encoder` |
+| Training and evaluation data | `python -m nv.build_sft --n_train 6000 --n_eval 1644 --noise 0.15` |
+| LoRA training | `python -m nv.train_lora --out ckpt/lora_mixed` |
+| Inference | `python -m nv.infer --split test --fmt mcqa --name lora_mixed_mcqa --adapter ckpt/lora_mixed/final` |
+| Scores, intervals, flips | `python -m nv.evaluate --split test --baseline zs_noev` |
+| Trust layer | `python -m nv.hierarchy --name lora_mixed_mcqa` |
+| Summary for the paper | `python scripts/extract_metrics.py --src runs_3b/results --out runs_3b/metrics_summary.json` |
+| Demo | `python demo.py --adapter ckpt/lora_mixed/final --share` |
+
+## Repository layout
 
 ```
-~/newsvqa_data/TARA_dataset/img/train/train/<idx>.png   (from Windows: src/data/TARA_dataset/img)
-~/newsvqa_data/TARA_dataset/img/dev/<idx>.png
-~/newsvqa_data/TARA_dataset/img/test/<idx>.png          (when available; otherwise use SPLIT=dev)
-~/newsvqa_runs/prepared/{corpus.jsonl,tara_*.jsonl}     (from prepared.tar.gz, already built)
-~/newsvqa_runs/geonames/geonames_results.json           (from prepared.tar.gz)
+nv/                    one module per stage (python -m nv.<stage>)
+  prepare.py           corpus filter and TARA normalisation (removes every dev/test source article)
+  embed.py, retrieve.py, cross_encoder.py    retrieval
+  build_sft.py         training and evaluation prompts
+  train_lora.py, infer.py                    fine-tuning and batched generation
+  evaluate.py, metrics.py, geo.py            scores, bootstrap intervals, gazetteer
+  hierarchy.py         trust layer
+notebooks/             geotag_colab.ipynb
+scripts/               run_all.sh, extract_metrics.py, plot_loss.py
+results/               reference numbers (NewsVQA-lite run)
+demo.py                Gradio app
 ```
 
-```bash
-mkdir -p ~/newsvqa_runs && tar -xzf prepared.tar.gz -C ~/newsvqa_runs
-# offline gazetteer for GREAT/CO-delta (≈3 MB); avoids the GeoNames API rate limit
-cd ~/newsvqa_runs/geonames && wget https://download.geonames.org/export/dump/cities15000.zip \
-   && unzip -o cities15000.zip && wget https://download.geonames.org/export/dump/countryInfo.txt \
-   && wget https://download.geonames.org/export/dump/admin1CodesASCII.txt && cd -
-```
+`ARCHITECTURE_GUIDE.md` maps every equation to the line of code that implements it.
 
-## 1. Run
+## Metrics
 
-```bash
-export NV_DATA=~/newsvqa_data NV_OUT=~/newsvqa_runs
-tmux new -s nv
-bash scripts/run_all.sh 2>&1 | tee run_all.log        # SPLIT=dev bash scripts/run_all.sh  if test images are missing
-```
+- **GREAT**: mean of a date score and a location score, each 0–100 with partial credit (introduced by Siingh et al., 2025; this code follows NewsRECON's implementation, which scores the date and location parts only).
+- **EM@1**: exact match; a location counts if the most specific gold place name appears in the answer.
+- **Correct → wrong flips**: test images whose location was right from the photo alone and turned wrong once articles were added, i.e. blind trust in evidence.
+- **ECE**: expected calibration error of the multiple-choice confidence, 10 bins.
 
-| step | command | time (24 GB GPU, rough) | output |
-|---|---|---|---|
-| (done) corpus + TARA normalisation | `python -m nv.prepare` | CPU, 3 min | `prepared/` |
-| CLIP embeddings | `python -m nv.embed` | 10 min | `emb/` |
-| bi-encoder retrieval | `python -m nv.retrieve` | 1 min | `retr/*_bi.npz`, `results/retrieval_bi_recall.json` |
-| location cross-encoder | `python -m nv.cross_encoder` | 3 min | `retr/*_final.npz`, `results/retrieval_ce_recall.json` |
-| data engine | `python -m nv.build_sft` | 1 min | `sft/train.jsonl`, `sft/{dev,test}_eval.jsonl`, `preds/*/retrieval_*.jsonl` |
-| zero-shot runs | `python -m nv.infer --fmt qa_noev/qa/mcqa` | 3–6 min each | `preds/<split>/zs_*.jsonl` |
-| LoRA training | `python -m nv.train_lora` | 30–60 min | `ckpt/lora_mixed/final` |
-| fine-tuned runs | `python -m nv.infer --adapter …` | 3–6 min each | `preds/<split>/lora_*.jsonl` |
-| scoring | `python -m nv.evaluate --split test` | 1 min | `results/test_results.md` |
-| demo chatbot | `python demo.py --share` | – | Gradio link |
+## Credits and related work
 
-If training runs out of memory: `--bs 2 --accum 8`, or `--max_pixels 200704` → `--max_pixels 150000`.
+The retrieval and fine-tuning pipeline follows NewsVQA-lite (2026). This repository rebuilds it from scratch, evaluates on the full TARA test set with bootstrap intervals, and adds the conformal trust layer.
 
-## 2. What to report
+- NewsRECON: Tonglet et al., [arXiv:2601.14121](https://arxiv.org/abs/2601.14121), retrieval design and evaluation protocol.
+- LiveVQA: Fu et al., [arXiv:2504.05288](https://arxiv.org/abs/2504.05288), the three training formats.
+- TARA: Fu et al., ACL 2022, [dataset](https://github.com/zeyofu/tara).
+- GETReason (GREAT metric): Siingh et al., [arXiv:2505.21863](https://arxiv.org/abs/2505.21863).
+- Conformal risk control: Angelopoulos et al., ICLR 2024, [arXiv:2208.02814](https://arxiv.org/abs/2208.02814).
+- Closest ideas to the trust layer: conformal factuality (Mohri and Hashimoto, [ICML 2024](https://proceedings.mlr.press/v235/mohri24a.html)), hierarchical selective classification (Goren et al., NeurIPS 2024, [arXiv:2405.11533](https://arxiv.org/abs/2405.11533)), conformal linguistic calibration (Jiang et al., [arXiv:2502.19110](https://arxiv.org/abs/2502.19110)) and C-RAG (Kang et al., [ICML 2024](https://proceedings.mlr.press/v235/kang24a.html)). Geotag applies calibrated back-off to two hierarchies at once (place and time) for retrieval-augmented, multimodal answers.
 
-* **Retrieval**: R@1/R@5 for location and event before and after the cross-encoder (`results/retrieval_*_recall.json`).
-* **Main table** (`results/<split>_results.md`): date EM@1 / E-F1 / Δ / GREAT_date, location EM@1 / E-F1 / CO∆ /
-  GREAT_loc, overall GREAT, for `retrieval_bi`, `retrieval_ce`, `retrieval_ce_cluster`, `zs_noev` (MLLM default),
-  `zs_qa` (MLLM + NewsRECON evidence), `zs_mcqa`, and `lora_mixed_*` (ours).
-* **Blind trust**: flips vs `zs_noev`, i.e. answers that were correct without evidence and became wrong with it.
-  NewsRECON reports 6/50 such cases for the zero-shot MLLM; we want fewer for `lora_mixed_*` than for `zs_qa`.
-* **Calibration**: `MCQA_ECE` from the option-letter probability (lower is better).
+## Limitations
 
-Caveats to state: different corpus (NYT only, rule-filtered), frozen CLIP, 3B model, 500-image evaluation subset,
-offline GeoNames geocoding. Absolute numbers are not comparable to the NewsRECON paper; comparisons inside
-the table are like for like.
+- The corpus is NYT only, 2010–2021, and the CLIP encoders are frozen, so absolute numbers are not comparable with the NewsRECON paper.
+- The trust layer's bound is an average over calibration sets and assumes dev and test images are exchangeable; it says nothing about photos from other sources.
+- Place names the gazetteer cannot resolve count as errors, and a gold answer coarser than the committed one is judged at the gold's level.
