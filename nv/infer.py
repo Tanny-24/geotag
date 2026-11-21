@@ -4,8 +4,9 @@
     python -m nv.infer --split test --fmt qa      --name zs_qa                       # MLLM + retrieved articles
     python -m nv.infer --split test --fmt mcqa    --name lora_mcqa --adapter ckpt/lora_mixed/final
 
-Writes $NV_OUT/preds/{split}/{name}.jsonl with raw output, parsed Location/Date, option letter and the
-probability of the first generated option letter (MCQA confidence, used for calibration).
+Writes $NV_OUT/preds/{split}/{name}.jsonl with raw output, parsed Location/Date, option letter, and for
+MCQA the first-token probability of every valid option letter (renormalised; the trust layer needs all of
+them) plus its max (MCQA confidence, used for ECE).
 """
 import argparse
 import os
@@ -90,7 +91,8 @@ def main():
                 loc, date = loc or o_["loc"], date or o_["date"]       # fallback if the final lines are missing
             preds.append({"split": r["split"], "idx": r["idx"], "fmt": args.fmt, "raw": o, "pred_loc": loc,
                           "pred_date": date, "letter": letter,
-                          "letter_conf": float(conf_dist.max()) if args.fmt == "mcqa" else None})
+                          "letter_conf": float(conf_dist.max()) if args.fmt == "mcqa" else None,
+                          "letter_probs": conf_dist.tolist() if args.fmt == "mcqa" else None})
         print(f"{min(s + args.bs, len(recs))}/{len(recs)}  last: {outs[-1][:90]!r}", flush=True)
         write_jsonl(preds, out_path)
     print("wrote", out_path)
