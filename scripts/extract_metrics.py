@@ -7,7 +7,13 @@ import argparse
 import json
 import os
 
-KEEP = ["date_EM@1", "GREAT_date", "loc_EM@1", "GREAT_loc", "GREAT", "MCQA_ECE"]
+KEEP = ["date_EM@1", "GREAT_date", "loc_EM@1", "GREAT_loc", "GREAT", "GREAT_95CI", "GREAT_gain", "GREAT_gain_95CI",
+        "GREAT@500", "MCQA_ECE"]
+TRUST = ["lambda", "error", "answered", "specificity"]
+
+
+def r1(v):
+    return [round(x, 1) for x in v] if isinstance(v, list) else round(v, 1)
 
 
 def load(path):
@@ -26,7 +32,8 @@ def main():
     res = load(os.path.join(args.src, f"{args.split}_results.json"))
     bi = load(os.path.join(args.src, "retrieval_bi_recall.json"))
     ce = load(os.path.join(args.src, "retrieval_ce_recall.json"))
-    runs = {r["run"]: {k: round(r[k], 1) for k in KEEP if isinstance(r.get(k), (int, float)) and r[k] == r[k]}
+    trust = load(os.path.join(args.src, "trust_lora_mixed_mcqa.json"))
+    runs = {r["run"]: {k: r1(r[k]) for k in KEEP if isinstance(r.get(k), (int, float, list)) and r[k] == r[k]}
             for r in res.get("table", [])}                               # r[k] == r[k] drops NaN
     summary = {
         "split": args.split,
@@ -35,6 +42,10 @@ def main():
         "flips_vs_baseline": res.get("flips", {}),
         "retrieval_location": {"bi": bi.get(args.split, {}).get("location"),
                                "reranked": ce.get(args.split, {}).get("location"), "alpha": ce.get("alpha")},
+        "trust_layer": {dim: {"n_test": d["n_test"], "finest": {k: r1(d["finest"][k]) for k in TRUST},
+                              **{eps: {m: {k: r1(v[k]) for k in TRUST} for m, v in by.items()}
+                                 for eps, by in d["eps"].items()}}
+                        for dim, d in trust.get("dims", {}).items()},
     }
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
