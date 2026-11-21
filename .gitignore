@@ -60,8 +60,11 @@ TARA/
 code/
 _archive/upstream/
 
-# Figures the slides need
+# Paper figures are committed
 !paper/figs/*.pdf
+
+# Earlier NewsVQA-lite slide deck, kept only locally
+paper/slides.tex
 
 # Earlier NewsVQA-lite IEEE report: holds personal emails and roll numbers, kept only locally
 paper/newsvqa_lite_report.tex
