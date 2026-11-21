@@ -11,7 +11,7 @@ plus
   * 95% bootstrap interval of GREAT (1,000 image resamples, shared by all runs so differences are paired)
     and its gain over --baseline with interval
   * GREAT on the --subset images build_sft would pick with --n_eval <subset> (seed-1234 shuffle), i.e. the
-    teammates' 500-image subset, so the numbers can be set next to results/
+    500-image subset of the reference run in results/, so the numbers can be set next to it
 All runs are scored on the indices they share, so the table is a fair comparison.
 """
 import argparse

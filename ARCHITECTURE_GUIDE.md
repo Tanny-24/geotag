@@ -26,8 +26,8 @@ scripts/            run_all.sh (full pipeline), resume.sh, extract_metrics.py
 demo.py             Gradio chatbot
 results/            committed summaries (tables, recall, stats, metrics_summary.json)
 paper/              slides.tex + figs/
-data/  runs/        git-ignored inputs and outputs
-_archive/           earlier code, never deleted (see "Where things moved")
+notebooks/          geotag_colab.ipynb (full run on Colab)
+data/  runs_3b/     git-ignored inputs and outputs
 ```
 
 ## Code-to-math map
@@ -76,18 +76,3 @@ GREAT was introduced by Siingh et al. (GETReason, ACL 2025). `metrics.py` follow
 | Paper numbers | `python scripts/extract_metrics.py --src runs/results` |
 | Everything | `bash scripts/run_all.sh 2>&1 \| tee runs/run_all.log` |
 | Demo | `python demo.py --adapter ckpt/lora_mixed/final --share` |
-
-Missing locally: TARA dev/test images (only `data/TARA_dataset/img/train/` is present) and the trained adapter. Both come from the Colab run.
-
-## Where things moved (nothing was deleted)
-| Before | Now |
-|---|---|
-| `NewsVQA/` (clone of the group repo) | `_archive/upstream/newsvqa_group_repo/` |
-| `code/emnlp2026-newsrecon/` (NewsRECON with uncommitted Colab edits) | `_archive/upstream/newsrecon_colab_modified/` |
-| `TARA/` (TARA repo) | `_archive/upstream/tara_repo/` |
-| `colab_pipeline.ipynb` (targets code that is not in this folder) | `_archive/colab_pipeline_newsrecon.ipynb` |
-| `outputs/`, `input_zip_nyt_final/` (empty) | `_archive/` |
-| `datasets/TARA`, `datasets/5Pils-OOC` | `data/TARA_dataset`, `data/5Pils-OOC` |
-| `NewsVQA/src/data/processed_articles` | `data/processed_articles` |
-| `~/Downloads/MM-main` code, `newsvqa_runs/` (copied; originals untouched) | `nv/`, `scripts/`, `demo.py`, `runs/` |
-| `~/Downloads/newsvqa_slides_latex` (copied) | `paper/` |

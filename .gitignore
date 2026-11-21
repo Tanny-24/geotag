@@ -63,5 +63,5 @@ _archive/upstream/
 # Figures the slides need
 !paper/figs/*.pdf
 
-# Teammates' IEEE report: has their institute emails and roll numbers
-paper/teammates_report.tex
+# Earlier NewsVQA-lite IEEE report: holds personal emails and roll numbers, kept only locally
+paper/newsvqa_lite_report.tex
