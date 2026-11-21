@@ -19,6 +19,7 @@ nv/                 pipeline package, one module per stage (run as python -m nv.
   train_lora.py     LoRA fine-tuning                    -> runs/ckpt/
   infer.py          batched generation                  -> runs/preds/<split>/<run>.jsonl
   evaluate.py       tables, flips, ECE                  -> runs/results/
+  hierarchy.py      trust layer: calibrated back-off    -> runs/results/trust_<run>.json
   metrics.py, geo.py   NewsRECON metric code, offline gazetteer
   common.py, prompts.py  labels, clustering, prompt templates
 scripts/            run_all.sh (full pipeline), resume.sh, extract_metrics.py
@@ -53,6 +54,10 @@ Notation: image x, article a with headline h_a, abstract b_a and location string
 | GREAT | (GREAT_date + GREAT_loc)/2 | `evaluate.py:71` |
 | Delta / CO-Delta | 1/(1 + \|Δyears\|), 1/(1 + d_km) | `metrics.py:144,158` |
 | Blind-trust flips | C→W = #{i : EM_base(i) = 1 ∧ EM_run(i) = 0}, base = zero-shot 3B without evidence | `evaluate.py:78-90` |
+| Hierarchy paths | location → (country, region, city) via the gazetteer; date → (year, month, day) | `hierarchy.py: loc_path, date_path` |
+| Node confidence | k* = argmax_k p_k; c_l = Σ_k p_k·1[path_k[:l] = path_k*[:l]], so c_1 ≥ c_2 ≥ c_3 | `hierarchy.py: build` |
+| Commit rule | answer k*'s node at depth l*(λ) = max{l : c_l ≥ λ}; no answer if c_1 < λ | `hierarchy.py: commit` |
+| Conformal risk control | λ̂ = min{λ : (n·R̂_cal(λ) + 1)/(n + 1) ≤ ε}, R̂ = error of the committed node ⇒ E[error] ≤ ε on exchangeable test images | `hierarchy.py: crc` |
 
 GREAT was introduced by Siingh et al. (GETReason, ACL 2025). `metrics.py` follows NewsRECON's implementation, which scores only the date and location parts (no event-similarity term); say so in the paper.
 
@@ -67,6 +72,7 @@ GREAT was introduced by Siingh et al. (GETReason, ACL 2025). `metrics.py` follow
 | **Train** | `python -m nv.train_lora --out ckpt/lora_mixed --workers 4` |
 | Inference | `python -m nv.infer --split test --fmt qa --name lora_mixed_qa --adapter ckpt/lora_mixed/final` |
 | **Evaluate** | `python -m nv.evaluate --split test --baseline zs_noev` |
+| Trust layer (needs the dev and test MCQA runs) | `python -m nv.hierarchy --name lora_mixed_mcqa` |
 | Paper numbers | `python scripts/extract_metrics.py --src runs/results` |
 | Everything | `bash scripts/run_all.sh 2>&1 \| tee runs/run_all.log` |
 | Demo | `python demo.py --adapter ckpt/lora_mixed/final --share` |
