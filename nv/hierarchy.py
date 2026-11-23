@@ -59,6 +59,19 @@ def date_path(s):
     return tuple("-".join(p[:i]) for i in range(1, len(p) + 1)) if p[0].isdigit() else ()
 
 
+def node_scores(probs, opt_paths, art_paths):
+    """One image -> (k*'s path, c_l, p_k*, e_l), the last three per depth with -inf past the path's depth.
+    No candidates, or k* not in the gazetteer, gives an empty path that never answers."""
+    k = int(np.argmax(probs)) if len(probs) else 0
+    pk = opt_paths[k] if len(probs) else ()
+    w = 1 / np.arange(1, len(art_paths) + 1)
+    conf = [sum(p for p, q in zip(probs, opt_paths) if q[:l] == pk[:l]) if l <= len(pk) else -np.inf for l in (1, 2, 3)]
+    top = [probs[k] if l <= len(pk) else -np.inf for l in (1, 2, 3)]
+    ev = [float(w @ np.array([q[:l] == pk[:l] for q in art_paths], float)) / max(w.sum(), 1e-9)
+          if l <= len(pk) else -np.inf for l in (1, 2, 3)]
+    return pk, conf, top, ev
+
+
 def build(recs, preds, gold, arts, opt_path, gold_path, art_path):
     """-> conf, top, ev, ok, each (n, 3): c_l, p_k* and e_l along k*'s path (-inf past its depth) and whether
     committing at depth l would be right. Images without a gold path at this level are skipped."""
@@ -67,17 +80,11 @@ def build(recs, preds, gold, arts, opt_path, gold_path, art_path):
         g = gold_path(gold[i])
         if not g or i not in preds:
             continue
-        probs = preds[i]["letter_probs"][:len(rec["options"])]
-        paths = [opt_path(o) for o in rec["options"]]
-        k = int(np.argmax(probs)) if probs else 0
-        pk = paths[k] if probs else ()          # no candidates, or k* not in the gazetteer: never answers
-        ap = [art_path(a) for a in arts.get(i, [])[:20]]
-        w = 1 / np.arange(1, len(ap) + 1)
-        conf.append([sum(p for p, q in zip(probs, paths) if q[:l] == pk[:l]) if l <= len(pk) else -np.inf
-                     for l in (1, 2, 3)])
-        top.append([probs[k] if l <= len(pk) else -np.inf for l in (1, 2, 3)])
-        ev.append([float(w @ np.array([q[:l] == pk[:l] for q in ap], float)) / max(w.sum(), 1e-9)
-                   if l <= len(pk) else -np.inf for l in (1, 2, 3)])
+        pk, c, t, e = node_scores(preds[i]["letter_probs"][:len(rec["options"])],
+                                  [opt_path(o) for o in rec["options"]], [art_path(a) for a in arts.get(i, [])[:20]])
+        conf.append(c)
+        top.append(t)
+        ev.append(e)
         ok.append([pk[:min(l, len(g))] == g[:min(l, len(g))] for l in (1, 2, 3)])
     return [np.array(x, float if j < 3 else bool).reshape(-1, 3) for j, x in enumerate((conf, top, ev, ok))]
 
