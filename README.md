@@ -4,7 +4,7 @@ Where and when was this news photo taken? Geotag retrieves news articles for a p
 
 > Photo of a collapsed building, no caption.
 > Without the trust layer: **Port-au-Prince, Haiti, 2010-01-19**, which may be wrong in the city or the day.
-> With the trust layer at ε = 10%: **Haiti, 2010**, an answer the model can stand behind, with expected error at most 10%.
+> With the trust layer at ε = 10%: **Haiti**, and no date unless the model is confident enough, so that the expected error of what it does say stays at most 10%.
 
 ## How it works
 
@@ -15,7 +15,7 @@ flowchart LR
   C --> D["Top-3 articles +<br/>4 candidate events"]
   D --> E["Qwen2.5-VL-3B + LoRA<br/>trained on wrong-place evidence"]
   E --> F["Trust layer<br/>conformal back-off"]
-  F --> G["Haiti, 2010<br/>(error ≤ ε)"]
+  F --> G["Haiti<br/>(expected error ≤ ε)"]
 ```
 
 1. **Retriever.** Frozen CLIP ViT-L/14 scores 176,314 NYT articles (2010–2021, headline + abstract) against the photo and keeps the top 50. A small MLP re-ranks them by how well each article's location fits the photo; its weight α = 0.1 is chosen on the dev set.
@@ -37,24 +37,52 @@ assuming dev and test images are exchangeable. The guarantee holds on average ov
 
 The layer is compared with two baselines on the same images: **finest** (always answer with full detail) and **selective** (the same calibration on $p_{k^\ast}$ alone, answering in full or not at all). It reports, for ε ∈ {5%, 10%, 20%}, the test error, the share of images answered, the share answered at each depth, and specificity (mean depth / 3).
 
-On synthetic probabilities over the real TARA labels, the average test error over 200 random dev/test splits was 4.91%, 9.90% and 19.75% for ε = 5%, 10% and 20% (location) and 4.99%, 9.93% and 19.84% (date). Synthetic probabilities cannot show whether back-off beats the selective baseline; that needs the real model's outputs.
+On synthetic probabilities over the real TARA labels, the average test error over 200 random dev/test splits was 4.91%, 9.90% and 19.75% for ε = 5%, 10% and 20% (location) and 4.99%, 9.93% and 19.84% (date). Synthetic probabilities cannot show whether back-off beats the selective baseline; the real model's outputs are under Results.
 
 ## Results
 
-**Status:** the code is complete; the full GPU run is pending. The tables below will report every number on the 1,571 TARA test images that have a gold location or date, with 95% bootstrap intervals, plus `GREAT@500` on the 500-image subset used by the reference run.
+One training run (seed 0), scored on the 1,571 TARA test images that have a gold location or date (location n = 1,476, date n = 1,303). Brackets are 95% bootstrap intervals over images (1,000 resamples); gains are paired against the photo-only baseline. `GREAT@500` scores the 500-image subset of the NewsVQA-lite reference run, whose own numbers are in the last column.
 
-Reference: the NewsVQA-lite run of the same pipeline (500 test images, 1 seed). These are the numbers this repository sets out to reproduce; they are not yet results of this repository.
+| Run | GREAT [95% CI] | Gain vs photo only [95% CI] | Location EM@1 | Date EM@1 | Correct → wrong location | GREAT@500 | Reference @500 |
+|---|---|---|---|---|---|---|---|
+| Retrieval only (re-ranked top-1) | 55.6 [54.2, 56.8] | +3.1 [1.6, 4.7] | 24.7 | 3.9 | 206 | 54.8 | 54.7 |
+| Qwen2.5-VL-3B, photo only | 52.4 [51.1, 53.8] | – | 27.6 | 2.4 | – | 51.1 | 51.1 |
+| 3B + top-3 articles | 57.2 [55.9, 58.6] | +4.8 [3.5, 6.1] | 30.9 | 3.9 | 108 | 57.1 | 57.2 |
+| 3B + top-3 articles, multiple-choice prompt | 53.4 [52.0, 54.9] | +1.0 [−0.4, 2.5] | 24.5 | 3.5 | 179 | 53.9 | 54.0 |
+| **3B + LoRA, direct answer** | **62.7 [61.4, 63.9]** | **+10.2 [8.9, 11.5]** | **45.5** | 4.3 | **29** | 62.9 | 62.5 |
+| 3B + LoRA, multiple choice | 62.8 [61.4, 64.1] | +10.3 [9.0, 11.6] | 45.1 | 4.6 | 38 | 62.9 | 61.9 |
 
-| Run | GREAT | Location EM@1 | Date EM@1 | Correct → wrong location (vs photo only) |
-|---|---|---|---|---|
-| Retrieval only (re-ranked top-1) | 54.7 | 25.5 | 4.2 | 57 |
-| Qwen2.5-VL-3B, photo only | 51.1 | 24.6 | 1.2 | – |
-| Qwen2.5-VL-3B + top-3 articles | 57.2 | 31.4 | 3.5 | 29 |
-| Qwen2.5-VL-7B + top-3 articles | 57.8 | 27.6 | 3.9 | 42 |
-| 3B + LoRA, direct answer | 62.5 | 44.2 | 4.6 | 7 |
-| 3B + LoRA, multiple choice | 61.9 | 44.8 | 5.6 | 10 |
+"Correct → wrong location" counts test images whose location was right from the photo alone and turned wrong in that run (blind trust in the articles).
 
-The multiple-choice confidence's expected calibration error fell from 23.6 (zero-shot) to 18.4 (LoRA). Retrieval: location R@1 on test is 52.9 with CLIP alone and 56.3 after re-ranking.
+- **Reproduction.** On the reference run's 500 images every system lands within 1.0 GREAT of the reference; retrieval matches as well (location R@1 55.05 on dev and 56.1 on test, against 55.1 and 56.3, re-ranker weight α = 0.1). The reference run's zero-shot Qwen2.5-VL-7B with the same articles scored 57.8 on its 500 images; it is not re-run here.
+- **Fine-tuning.** LoRA adds 5.5 GREAT over the same 3B model given the same articles (62.7 vs 57.2; the intervals do not overlap) and lifts location EM@1 from 30.9% to 45.5%. Blind-trust errors fall from 108 to 29 images, while images whose location the articles fix rise from 157 to 294.
+- **Calibration.** The expected calibration error of the multiple-choice confidence falls from 24.8 (zero-shot) to 19.2 (LoRA).
+- **Exact dates stay hard.** Date EM@1 is at most 4.6% for every system.
+
+### Trust layer on the test set
+
+λ is calibrated on the dev multiple-choice run (1,474 images with a resolvable gold location, 1,312 with a gold date) and scored on test (1,471 and 1,299). Depth 1/2/3 is country/region/city or year/month/day.
+
+| Dimension | ε | Method | Test error % | Answered % | Depth 1/2/3 % | Specificity % |
+|---|---|---|---|---|---|---|
+| Location | – | finest | 48.4 | 98.8 | 40 / 9 / 50 | 69.1 |
+| Location | 5% | **back-off** | 5.8 | **40.4** | 29 / 4 / 7 | **19.7** |
+| Location | 5% | selective | 6.2 | 29.9 | 17 / 3 / 11 | 17.9 |
+| Location | 10% | **back-off** | 12.2 | **56.4** | 35 / 6 / 15 | **31.2** |
+| Location | 10% | selective | 11.8 | 48.3 | 26 / 4 / 19 | 29.8 |
+| Location | 20% | **back-off** | 21.1 | **72.9** | 40 / 7 / 26 | **44.0** |
+| Location | 20% | selective | 20.5 | 63.8 | 31 / 5 / 28 | 41.5 |
+| Date | – | finest | 96.5 | 100.0 | 0 / 0 / 100 | 100.0 |
+| Date | 5% | back-off | 6.4 | 7.4 | 2 / 1 / 5 | 6.0 |
+| Date | 5% | selective | 6.5 | 6.9 | 0 / 0 / 7 | 6.9 |
+| Date | 10% | back-off | 11.6 | 13.5 | 3 / 2 / 9 | 11.3 |
+| Date | 10% | selective | 10.7 | 11.2 | 0 / 0 / 11 | 11.2 |
+| Date | 20% | back-off | 22.2 | 24.7 | 3 / 2 / 19 | 21.9 |
+| Date | 20% | selective | 20.8 | 21.9 | 0 / 0 / 22 | 21.9 |
+
+- **Location.** At the same target, back-off answers 8 to 10 points more images than the selective baseline (56.4% vs 48.3% at ε = 10%) with test error within 0.6 points of it: where the selective rule stays silent, back-off still names the country.
+- **Error above target on this split.** For both methods and both dimensions the test error is 0.8 to 2.2 points above ε. The bound holds on average over calibration sets, so a single split can land above it; a check that pools dev and test and re-splits them many times is the next step before claiming the bound holds here.
+- **Dates.** The model is rarely confident about dates: even at ε = 20% only a quarter of the images get one, and backing off to the year or month happens for at most 3% and 2% of images.
 
 ## Run it
 
@@ -125,6 +153,7 @@ The retrieval and fine-tuning pipeline follows NewsVQA-lite (2026). This reposit
 
 ## Limitations
 
+- All results come from one training run (seed 0). The intervals cover the choice of test images, not training randomness; seeds and the noise-rate ablation are still to run.
 - The corpus is NYT only, 2010–2021, and the CLIP encoders are frozen, so absolute numbers are not comparable with the NewsRECON paper.
-- The trust layer's bound is an average over calibration sets and assumes dev and test images are exchangeable; it says nothing about photos from other sources.
+- The trust layer's bound is an average over calibration sets and assumes dev and test images are exchangeable; on the one dev → test split reported here the test error sits 0.8 to 2.2 points above the target. It says nothing about photos from other sources.
 - Place names the gazetteer cannot resolve count as errors, and a gold answer coarser than the committed one is judged at the gold's level.
