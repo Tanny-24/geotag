@@ -58,6 +58,9 @@ Notation: image x, article a with headline h_a, abstract b_a and location string
 | Node confidence | k* = argmax_k p_k; c_l = Σ_k p_k·1[path_k[:l] = path_k*[:l]], so c_1 ≥ c_2 ≥ c_3 | `hierarchy.py: build` |
 | Commit rule | answer k*'s node at depth l*(λ) = max{l : c_l ≥ λ}; no answer if c_1 < λ | `hierarchy.py: commit` |
 | Conformal risk control | λ̂ = min{λ : (n·R̂_cal(λ) + 1)/(n + 1) ≤ ε}, R̂ = error of the committed node ⇒ E[error] ≤ ε on exchangeable test images | `hierarchy.py: crc` |
+| Evidence consensus | e_l = Σ_{a ∈ top-20} w_a·1[path_a[:l] = path_k*[:l]] / Σ_a w_a, w_a = 1/rank(a); location path from the article's location tag, date path from its publication date | `hierarchy.py: build` |
+| Evidence model | P(correct at l) = σ(wᵀ[logit c_l, logit e_l, logit p_k*, onehot(l)]), L2 logistic regression by Newton steps, then a running minimum over l | `hierarchy.py: features, fit, evidence_conf` |
+| Protocol | dev halves: one fits w, the other sets λ̂ for every method; test only scores. `--resplits R`: pooled dev + test, fit 25% / calibrate 25% / score 50%, R times | `hierarchy.py: run_split, main` |
 
 GREAT was introduced by Siingh et al. (GETReason, ACL 2025). `metrics.py` follows NewsRECON's implementation, which scores only the date and location parts (no event-similarity term); say so in the paper.
 
@@ -72,7 +75,7 @@ GREAT was introduced by Siingh et al. (GETReason, ACL 2025). `metrics.py` follow
 | **Train** | `python -m nv.train_lora --out ckpt/lora_mixed --workers 4` |
 | Inference | `python -m nv.infer --split test --fmt qa --name lora_mixed_qa --adapter ckpt/lora_mixed/final` |
 | **Evaluate** | `python -m nv.evaluate --split test --baseline zs_noev` |
-| Trust layer (needs the dev and test MCQA runs) | `python -m nv.hierarchy --name lora_mixed_mcqa` |
+| Trust layer (needs the dev and test MCQA runs and retrieval) | `python -m nv.hierarchy --name lora_mixed_mcqa --resplits 200` |
 | Paper numbers | `python scripts/extract_metrics.py --src runs/results` |
 | Everything | `bash scripts/run_all.sh 2>&1 \| tee runs/run_all.log` |
 | Demo | `python demo.py --adapter ckpt/lora_mixed/final --share` |

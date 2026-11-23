@@ -10,6 +10,7 @@ import os
 KEEP = ["date_EM@1", "GREAT_date", "loc_EM@1", "GREAT_loc", "GREAT", "GREAT_95CI", "GREAT_gain", "GREAT_gain_95CI",
         "GREAT@500", "MCQA_ECE"]
 TRUST = ["lambda", "error", "answered", "specificity"]
+RESPLIT = ["error_mean", "above_eps_%", "answered_mean"]
 
 
 def r1(v):
@@ -44,7 +45,9 @@ def main():
                                "reranked": ce.get(args.split, {}).get("location"), "alpha": ce.get("alpha")},
         "trust_layer": {dim: {"n_test": d["n_test"], "finest": {k: r1(d["finest"][k]) for k in TRUST},
                               **{eps: {m: {k: r1(v[k]) for k in TRUST} for m, v in by.items()}
-                                 for eps, by in d["eps"].items()}}
+                                 for eps, by in d["eps"].items()},
+                              "resplit": {eps: {m: {k: r1(v[k]) for k in RESPLIT} for m, v in by.items()}
+                                          for eps, by in d.get("resplit", {}).items()}}
                         for dim, d in trust.get("dims", {}).items()},
     }
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
