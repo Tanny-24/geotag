@@ -25,7 +25,8 @@ country, so the error of the committed answer can only fall as lambda grows, and
 (Angelopoulos et al., ICLR 2024) picks lambda so that E[error] <= eps on new, exchangeable images.
 
 Methods: "finest" always answers in full (lambda = 0); "selective" calibrates p_k* and answers in full or
-not at all; "backoff" calibrates c_l; "evidence" calibrates the logistic score. Protocol: dev is split in
+not at all; "backoff" calibrates c_l; "evidence" calibrates the logistic score; "calibrated" is the same
+logistic model without e_l, the ablation that shows what the articles add. Protocol: dev is split in
 half (seed 0); one half fits the logistic model, the other sets lambda for every method; test only scores.
 --resplits R pools dev and test and repeats fit 25% / calibrate 25% / score 50% R times, which separates
 chance from a real dev/test difference when one split lands above eps.
@@ -43,8 +44,9 @@ from .geo import Geo
 
 LEVELS = {"location": ("country", "region", "city"), "date": ("year", "month", "day")}
 LAM = np.r_[np.linspace(0, 1, 1001), 1 + 1e-9]       # candidate thresholds; the last one never answers
-METHODS = ("selective", "backoff", "evidence")
+METHODS = ("selective", "backoff", "calibrated", "evidence")
 FEATURES = ["logit c_l", "logit e_l", "logit p_k*", "depth 1", "depth 2", "depth 3"]
+NOEV = [0, 2, 3, 4, 5]                               # every feature but logit e_l, for "calibrated"
 
 
 def loc_path(geo, s):
@@ -129,8 +131,11 @@ def report(conf, ok, lam):
 def run_split(D, fit_i, cal_i, test_i, eps_list):
     """Fit on fit_i, calibrate on cal_i, score test_i -> ({eps: {method: report}}, scores, logistic weights)."""
     valid = np.isfinite(D["conf"][fit_i])
-    w = fit(D["X"][fit_i][valid], D["ok"][fit_i][valid])
-    scores = {"selective": D["top"], "backoff": D["conf"], "evidence": evidence_conf(w, D["X"], D["conf"])}
+    X, y = D["X"][fit_i][valid], D["ok"][fit_i][valid]
+    w = {"calibrated": fit(X[:, NOEV], y), "evidence": fit(X, y)}
+    scores = {"selective": D["top"], "backoff": D["conf"],
+              "calibrated": evidence_conf(w["calibrated"], D["X"][..., NOEV], D["conf"]),
+              "evidence": evidence_conf(w["evidence"], D["X"], D["conf"])}
     res = {e: {m: report(s[test_i], D["ok"][test_i], crc(s[cal_i], D["ok"][cal_i], e)) for m, s in scores.items()}
            for e in eps_list}
     return res, scores, w
@@ -179,7 +184,8 @@ def main():
         res, scores, w = run_split(D, dev[: n_cal // 2], dev[n_cal // 2:], test_i, eps_list)
         out["dims"][dim] = r = {
             "n_cal": n_cal, "n_test": len(test_i), "finest": report(conf[test_i], ok[test_i], 0.0), "eps": res,
-            "weights": dict(zip(FEATURES, w.tolist())),
+            "weights": {m: dict(zip(FEATURES if m == "evidence" else [FEATURES[j] for j in NOEV], v.tolist()))
+                        for m, v in w.items()},
             "curve": {"lambda": LAM[::10].tolist(),
                       **{m: {"error": (100 * x.mean(0)).tolist(), "specificity": (100 * d.mean(0) / 3).tolist()}
                          for m in METHODS for d, x in [commit(scores[m][test_i], ok[test_i], LAM[::10])]}}}
@@ -211,9 +217,8 @@ def main():
               f"{out['dims']['location']['n_test']} {args.test}, date {out['dims']['date']['n_cal']} / "
               f"{out['dims']['date']['n_test']}. Depth 1/2/3 = {'/'.join(LEVELS['location'])} or "
               f"{'/'.join(LEVELS['date'])}.")
-    md += [f"Evidence-model weights ({', '.join(FEATURES)}): "
-           + "; ".join(f"{dim} " + ", ".join(f"{v:+.2f}" for v in out["dims"][dim]["weights"].values())
-                       for dim in paths)]
+    md += ["", "Logistic weights:"] + [f"- {dim}, {m}: " + ", ".join(f"{k} {v:+.2f}" for k, v in ws.items())
+                                       for dim in paths for m, ws in out["dims"][dim]["weights"].items()]
     if args.resplits:
         md += [""] + rs_md
     text = "\n".join(md)
