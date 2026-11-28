@@ -2,17 +2,26 @@
 candidate events -> the trust layer answers only as precisely as its calibrated confidence allows. Follow-up
 questions are answered with the same photo and articles in context.
 
-    python demo.py --adapter ckpt/lora_mixed/final --share [--examples 12,345,678]
+    python demo.py --adapter ckpt/lora_mixed/final --share [--examples 12,345,678]   # Colab: gradio.live link
+    python demo.py --adapter ckpt/lora_mixed/final [--port 7860]                    # server: also a JSON API
+
+On a server the web app is at / and the API at POST /api/locate (multipart field "image", optional query
+allowed_error=0.05|0.1|0.2), e.g. curl -F image=@photo.jpg "http://HOST:7860/api/locate?allowed_error=0.1"
 
 Reads from $NV_OUT: prepared/corpus.jsonl, emb/corpus_{text,loc}.npy, ckpt/loc_head.pt, geonames/,
 results/retrieval_ce_recall.json and results/trust_lora_mixed_mcqa.json (written by nv.hierarchy).
 """
 import argparse
+import threading
+import time
 from datetime import date
 
 import gradio as gr
 import numpy as np
 import torch
+import uvicorn
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
 
 from nv import config as C
@@ -44,6 +53,8 @@ class Pipeline:
         self.paths = {"location": (lambda o: loc_path(self.geo, o["loc"]), lambda a: loc_path(self.geo, a["loc_str"])),
                       "date": (lambda o: date_path(o["date"]), lambda a: date_path(a["date"]))}
         self.model, self.proc = load_model(adapter)
+        self.gpu = torch.cuda.get_device_name(0)
+        self.lock = threading.Lock()          # one GPU: web app and API requests take turns
 
     @torch.no_grad()
     def retrieve(self, img, k=C.TOPK):
@@ -57,11 +68,15 @@ class Pipeline:
         return [self.corpus[int(ids[0, o])] for o in order]
 
     def answer(self, img):
-        ranked = self.retrieve(img)
-        options = candidate_events(ranked[:20])
-        _, probs = generate(self.model, self.proc, [build_prompt("mcqa", ranked[:C.N_EVIDENCE], options)], [img], 8)
+        t = time.perf_counter()
+        with self.lock:
+            ranked = self.retrieve(img)
+            options = candidate_events(ranked[:20])
+            _, probs = generate(self.model, self.proc, [build_prompt("mcqa", ranked[:C.N_EVIDENCE], options)], [img], 8)
         p = probs[0][:len(options) + 1]
-        return self.score(options, (p / p.sum()).tolist(), ranked)
+        res = self.score(options, (p / p.sum()).tolist(), ranked)
+        res["latency_s"] = round(time.perf_counter() - t, 2)
+        return res
 
     def score(self, options, p, ranked):
         """-> candidate events, their probabilities (last: "none"), and per dimension k*'s path with its calibrated
@@ -76,7 +91,8 @@ class Pipeline:
     def chat(self, img, arts, question, history):
         prompt = (f"This is a news photograph. Retrieved news articles:\n\n{evidence_block(arts)}\n\n"
                   + "".join(f"Q: {q}\nA: {a}\n" for q, a in history[-4:]) + f"Q: {question}\nA:")
-        out, _ = generate(self.model, self.proc, [prompt], [img], 200)
+        with self.lock:
+            out, _ = generate(self.model, self.proc, [prompt], [img], 200)
         return out[0].strip()
 
 
@@ -95,40 +111,56 @@ def when(path, depth):
     return month if depth == 2 else f"{int(d)} {month}"
 
 
+def decide(P, res, e):
+    """Per dimension, what the trust layer commits to at allowed error e: answer and level (None = no answer),
+    the calibrated confidence at that level (at the coarsest one when there is no answer) and the threshold."""
+    out = {}
+    for dim in ("location", "date"):
+        pk, s = res["scores"][dim]
+        lam = P.trust[dim][1][e]
+        depth = int((s >= lam).sum()) if pk else 0
+        value = None
+        if depth:
+            k = int(np.argmax(res["p"][:len(res["options"])]))
+            value = place(P.geo, res["options"][k]["loc"], depth) if dim == "location" else when(pk, depth)
+        out[dim] = {"answer": value, "level": LEVELS[dim][depth - 1] if depth else None, "in_gazetteer": bool(pk),
+                    "confidence": float(s[depth - 1] if depth else max(s[0], 0)), "threshold": lam}
+    return out
+
+
 def render(P, res, eps_label):
     """Markdown for the answer at one allowed error."""
-    e, options, p = EPS[eps_label], res["options"], res["p"]
+    options, p = res["options"], res["p"]
     if not options:
         return "No candidate events were retrieved for this photo, so Geotag gives no answer."
     k = int(np.argmax(p[:len(options)]))
     lines = []
-    for dim in ("location", "date"):
-        pk, s = res["scores"][dim]
-        lam = P.trust[dim][1][e]
-        depth = int((s >= lam).sum())
-        if not pk:
+    for dim, a in decide(P, res, EPS[eps_label]).items():
+        if not a["in_gazetteer"]:
             lines.append(f"**{dim.capitalize()}:** no answer (the top candidate is not in the gazetteer)")
-        elif depth == 0:
+        elif a["answer"] is None:
             lines.append(f"**{dim.capitalize()}:** not sure enough to say. Confidence in the {LEVELS[dim][0]} is "
-                         f"{max(s[0], 0):.0%}, the threshold is {lam:.0%}.")
+                         f"{a['confidence']:.0%}, the threshold is {a['threshold']:.0%}.")
         else:
-            value = place(P.geo, options[k]["loc"], depth) if dim == "location" else when(pk, depth)
-            lines.append(f"**{dim.capitalize()}: {value}**, answered at {LEVELS[dim][depth - 1]} level "
-                         f"(confidence {s[depth - 1]:.0%}, threshold {lam:.0%})")
+            lines.append(f"**{dim.capitalize()}: {a['answer']}**, answered at {a['level']} level "
+                         f"(confidence {a['confidence']:.0%}, threshold {a['threshold']:.0%})")
+        lines.append("")                                  # own paragraph, so location and date are on separate lines
     best = options[k]
-    lines += ["", f"Model's top candidate in full detail: {best['loc']}, {best['date']} ({p[k]:.0%})",
+    lines += [f"Model's top candidate in full detail: {best['loc']}, {best['date']} ({p[k]:.0%})",
               "", f"The thresholds are calibrated on held-out photos so that on average at most {eps_label} of photos "
               "get a wrong answer. Coarser answers are given when a finer one would not meet that bar.",
               "", "| Option | Location | Date | Probability |", "|---|---|---|---|"]
     lines += [f"| {LETTERS[i]} | {o['loc']} | {o['date']} | {p[i]:.0%} |" for i, o in enumerate(options)]
     lines.append(f"| {LETTERS[len(options)]} | none of these | | {p[len(options)]:.0%} |")
+    lines += ["", f"Answered in {res['latency_s']:.1f} s on {P.gpu}."]
     return "\n".join(lines)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--adapter", default="ckpt/lora_mixed/final")
-    ap.add_argument("--share", action="store_true")
+    ap.add_argument("--share", action="store_true", help="temporary public gradio.live link (web app only)")
+    ap.add_argument("--port", type=int, default=7860)
     ap.add_argument("--examples", default="", help="comma list of TARA test indices shown as example photos")
     args = ap.parse_args()
     if not torch.cuda.is_available():
@@ -176,7 +208,29 @@ def main():
         btn.click(run, [img, eps, state], [ans, ev, chat, state])
         eps.change(rerender, [eps, state], ans)
         q.submit(ask, [q, chat, state], [chat, q, state])
-    demo.launch(share=args.share, server_name="0.0.0.0")
+
+    api = FastAPI(title="Geotag API")
+
+    @api.post("/api/locate")
+    def locate(image: UploadFile = File(...), allowed_error: float = 0.1):
+        """News photo -> where and when, answered only as precisely as the trust layer allows."""
+        e = {float(v): v for v in EPS.values()}.get(allowed_error)
+        if e is None:
+            raise HTTPException(400, "allowed_error must be 0.05, 0.1 or 0.2")
+        res = P.answer(Image.open(image.file).convert("RGB"))
+        options, p = res["options"], res["p"]
+        return {"allowed_error": allowed_error, **decide(P, res, e),
+                "candidates": [{"location": o["loc"], "date": o["date"], "probability": p[i]}
+                               for i, o in enumerate(options)],
+                "none_probability": p[len(options)] if options else None,
+                "articles": [{"headline": a["head"], "date": a["date"], "location": a["loc_str"], "url": a["url"]}
+                             for a in res["arts"]],
+                "latency_s": res["latency_s"], "gpu": P.gpu}
+
+    if args.share:
+        demo.launch(share=True, server_name="0.0.0.0")
+    else:
+        uvicorn.run(gr.mount_gradio_app(api, demo, path="/"), host="0.0.0.0", port=args.port)
 
 
 if __name__ == "__main__":
