@@ -131,6 +131,8 @@ def main():
     ap.add_argument("--share", action="store_true")
     ap.add_argument("--examples", default="", help="comma list of TARA test indices shown as example photos")
     args = ap.parse_args()
+    if not torch.cuda.is_available():
+        raise SystemExit("The web app needs a GPU. On Colab: Runtime -> Change runtime type -> L4 GPU, then run again.")
     P = Pipeline(args.adapter)
 
     with gr.Blocks(title="Geotag") as demo:
@@ -146,7 +148,7 @@ def main():
             ans = gr.Markdown()
         with gr.Accordion("Evidence: top-3 retrieved articles", open=False):
             ev = gr.Markdown()
-        chat = gr.Chatbot(label="Ask about the photo or the event", type="messages")
+        chat = gr.Chatbot(label="Ask about the photo or the event")      # Gradio 6: role/content messages
         q = gr.Textbox(placeholder="e.g. What event is this? Who organised it?")
         if args.examples:
             gr.Examples([[C.tara_image("test", int(i))] for i in args.examples.split(",")], inputs=img)

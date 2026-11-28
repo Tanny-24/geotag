@@ -8,4 +8,4 @@ pillow
 tqdm
 requests
 python-dateutil
-gradio>=4.44        # only for demo.py
+gradio>=6           # only for demo.py (its chat box uses Gradio 6's role/content messages)
